@@ -195,8 +195,7 @@
         <label>PIN Management</label>
         <input type="password" id="inp-pin" placeholder="Masukkan PIN" onkeydown="if(event.key==='Enter')loginManager()">
       </div>
-      <p style="font-size:12px;color:var(--text-light);margin-top:-10px;margin-bottom:14px">Default PIN: <strong>1234</strong></p>
-      <button class="btn btn-primary btn-block" onclick="loginManager()">Masuk sebagai Management</button>
+<button class="btn btn-primary btn-block" onclick="loginManager()">Masuk sebagai Management</button>
     </div>
 
   </div>
@@ -426,11 +425,8 @@ async function apiGet() {
 }
 
 async function apiPost(action, data) {
-  const res = await fetch(API_URL, {
-    method: 'POST',
-    body: JSON.stringify({action, data}),
-    redirect: 'follow'
-  });
+  const params = new URLSearchParams({ action, data: JSON.stringify(data) });
+  const res = await fetch(`${API_URL}?${params}`, { redirect: 'follow' });
   const json = await res.json();
   if (json.status !== 'ok') throw new Error(json.message);
   return json.data;
@@ -510,7 +506,7 @@ function loginKaryawan() {
 
 function loginManager() {
   const pin = document.getElementById('inp-pin').value;
-  if (pin !== '1234') { showToast('❌ PIN salah'); return; }
+  if (pin !== '050626') { showToast('❌ PIN salah'); return; }
   session = {role:'manager', empId:null, nama:'Management'};
   startApp();
 }
