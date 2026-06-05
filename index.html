@@ -170,34 +170,8 @@
   <div class="loading-text" id="loading-text">Memuat data...</div>
 </div>
 
-<!-- ══ SCREEN: SETUP ══ -->
-<div id="screen-setup" class="screen active">
-  <div class="login-card">
-    <div class="login-logo">⚙️</div>
-    <h1>Setup Koneksi</h1>
-    <p class="sub">Hubungkan aplikasi ke Google Sheet sebagai database</p>
-
-    <ul class="step-list" style="margin-bottom:24px">
-      <li><span>Buka <strong>Google Sheet</strong> baru di <strong>sheets.google.com</strong></span></li>
-      <li><span>Klik menu <strong>Extensions &gt; Apps Script</strong></span></li>
-      <li><span>Hapus semua kode, paste isi file <strong>Backend_AppScript.gs</strong>, klik Save</span></li>
-      <li><span>Klik <strong>Deploy &gt; New deployment</strong> → Type: <strong>Web app</strong> → Execute as: <strong>Me</strong> → Access: <strong>Anyone</strong> → Deploy</span></li>
-      <li><span>Copy <strong>URL Web App</strong> yang muncul, paste di bawah ini</span></li>
-    </ul>
-
-    <div class="form-group">
-      <label>URL Apps Script Web App</label>
-      <input type="text" id="inp-api-url" placeholder="https://script.google.com/macros/s/.../exec">
-    </div>
-    <button class="btn btn-primary btn-block" onclick="saveSetup()">Simpan & Lanjutkan →</button>
-    <p style="text-align:center;margin-top:12px;font-size:12px;color:var(--text-light)">
-      URL disimpan di browser Anda saja
-    </p>
-  </div>
-</div>
-
 <!-- ══ SCREEN: LOGIN ══ -->
-<div id="screen-login" class="screen">
+<div id="screen-login" class="screen active">
   <div class="login-card">
     <div class="login-logo">📋</div>
     <h1>Absensi Pekerja</h1>
@@ -225,7 +199,6 @@
       <button class="btn btn-primary btn-block" onclick="loginManager()">Masuk sebagai Management</button>
     </div>
 
-    <button class="btn btn-outline btn-sm" style="width:100%;margin-top:16px;justify-content:center" onclick="resetSetup()">⚙️ Ubah Koneksi</button>
   </div>
 </div>
 
@@ -420,7 +393,7 @@ const AVATAR_COLORS = ['#3b82f6','#6366f1','#8b5cf6','#ec4899','#f59e0b','#10b98
 
 let session  = {role:null, empId:null, nama:null};
 let appData  = {karyawan:[], absen:[], tim:[]};
-let API_URL  = localStorage.getItem('absen_api_url') || '';
+const API_URL = 'https://script.google.com/macros/s/AKfycbysrve6iyrp2YMAf_xVsPqMCfn6ZKhMKs-ka_HxjzHooKnyeSQiZaYWpGb2DpUbUZVs/exec';
 
 // ══════════════════════════════════════════════════════
 // HELPERS
@@ -490,25 +463,6 @@ async function refreshData() {
     id:   String(t.ID   || t.id   || ''),
     nama: String(t.Nama || t.nama || '')
   }));
-}
-
-// ══════════════════════════════════════════════════════
-// SETUP
-// ══════════════════════════════════════════════════════
-function saveSetup() {
-  const url = document.getElementById('inp-api-url').value.trim();
-  if (!url || !url.startsWith('https://script.google.com')) {
-    showToast('⚠️ URL tidak valid. Harus diawali https://script.google.com'); return;
-  }
-  API_URL = url;
-  localStorage.setItem('absen_api_url', url);
-  goToLogin();
-}
-
-function resetSetup() {
-  localStorage.removeItem('absen_api_url');
-  API_URL = '';
-  showScreen('setup');
 }
 
 function showScreen(name) {
@@ -1001,12 +955,7 @@ function openAbsenModal(empId, tanggal) {
 // ══════════════════════════════════════════════════════
 // INIT
 // ══════════════════════════════════════════════════════
-if (API_URL) {
-  showScreen('login');
-  goToLogin();
-} else {
-  showScreen('setup');
-}
+goToLogin();
 </script>
 </body>
 </html>
