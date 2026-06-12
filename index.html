@@ -295,7 +295,7 @@
             <tfoot><tr class="tfoot-row" id="tfoot-laporan"></tr></tfoot></table>
           </div>
         </div>
-        <p style="font-size:12px;color:var(--text-light)">⚠ Total Izin = Cuti + Sakit + Izin + Tidak Hadir</p>
+        <p style="font-size:12px;color:var(--text-light)">⚠ Total Izin = WFH + Sakit + Izin + Tidak Hadir</p>
       </div>
 
       <!-- TAB: MANAJEMEN PEKERJA & TIM -->
@@ -397,7 +397,13 @@ const API_URL = 'https://script.google.com/macros/s/AKfycbysrve6iyrp2YMAf_xVsPqM
 // ══════════════════════════════════════════════════════
 // HELPERS
 // ══════════════════════════════════════════════════════
-function todayStr() { return new Date().toISOString().split('T')[0]; }
+function todayStr() {
+  const now = new Date();
+  const y = now.getFullYear();
+  const m = String(now.getMonth()+1).padStart(2,'0');
+  const d = String(now.getDate()).padStart(2,'0');
+  return `${y}-${m}-${d}`;
+}
 function fmtDate(s) { const [y,m,d]=s.split('-'); return `${d}/${m}/${y}`; }
 function initials(n){ return n.split(' ').map(w=>w[0]).join('').slice(0,2).toUpperCase(); }
 function avatarBg(idx){ return AVATAR_COLORS[idx%AVATAR_COLORS.length]; }
@@ -425,39 +431,117 @@ async function apiGet() {
 }
 
 async function apiPost(action, data) {
+  // Google Apps Script Web App: kirim via GET dengan query param
+  // (Apps Script doGet yang menangani, doPost sering tidak di-deploy)
   const params = new URLSearchParams({ action, data: JSON.stringify(data) });
-  const res = await fetch(`${API_URL}?${params}`, { redirect: 'follow' });
+  const res = await fetch(`${API_URL}?${params}`, { method: 'GET', redirect: 'follow' });
   const json = await res.json();
   if (json.status !== 'ok') throw new Error(json.message);
   return json.data;
 }
 
+// Normalisasi ID: strip leading zeros untuk perbandingan
+// Sheet Karyawan: "00070108", Sheet Absen: "70108" → keduanya jadi "70108"
+function normalizeId(id) {
+  const s = String(id || '').trim();
+  // Kalau purely numeric (mungkin ada leading zeros), strip them
+  if (/^\d+$/.test(s)) return String(parseInt(s, 10));
+  // Kalau alphanumeric (MS1, MS2, dll), tetap lowercase
+  return s.toLowerCase();
+}
+
+// Normalisasi tanggal dari berbagai format ke YYYY-MM-DD
+function normalizeTanggal(raw) {
+  if (!raw) return '';
+  const s = String(raw).trim();
+
+  // Sudah YYYY-MM-DD
+  if (/^\d{4}-\d{2}-\d{2}$/.test(s)) return s;
+
+  // Format ISO dengan timezone: "2026-06-11T17:00:00.000Z"
+  // Google Sheets simpan tanggal sebagai UTC-7 offset → perlu adjust ke WIB (UTC+7)
+  // Caranya: tambahkan 7 jam sebelum ambil tanggal
+  if (/^\d{4}-\d{2}-\d{2}T/.test(s)) {
+    const utcMs = new Date(s).getTime();
+    if (!isNaN(utcMs)) {
+      // Tambahkan offset WIB (UTC+7 = +7*60*60*1000)
+      const wibMs = utcMs + (7 * 60 * 60 * 1000);
+      const wibDate = new Date(wibMs);
+      const y = wibDate.getUTCFullYear();
+      const m = String(wibDate.getUTCMonth()+1).padStart(2,'0');
+      const d = String(wibDate.getUTCDate()).padStart(2,'0');
+      return `${y}-${m}-${d}`;
+    }
+  }
+
+  // Format DD/MM/YYYY atau D/M/YYYY
+  const dmyMatch = s.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
+  if (dmyMatch) {
+    const [, dd, mm, yyyy] = dmyMatch;
+    return `${yyyy}-${mm.padStart(2,'0')}-${dd.padStart(2,'0')}`;
+  }
+
+  // Google Sheets serial number (angka > 40000)
+  if (/^\d+$/.test(s) && parseInt(s) > 40000) {
+    const msDate = (parseInt(s) - 25569) * 86400000;
+    const dt = new Date(msDate);
+    if (!isNaN(dt)) return dt.toISOString().split('T')[0];
+  }
+
+  // Fallback: coba parse as-is, ambil local date
+  const parsed = new Date(s);
+  if (!isNaN(parsed)) {
+    const y = parsed.getFullYear();
+    const m = String(parsed.getMonth()+1).padStart(2,'0');
+    const d = String(parsed.getDate()).padStart(2,'0');
+    return `${y}-${m}-${d}`;
+  }
+  return s;
+}
+
 async function refreshData() {
   const d = await apiGet();
-  appData.karyawan = d.karyawan || [];
-  appData.absen    = (d.absen || []).map(a => ({
-    ...a,
-    tanggal: a.Tanggal || a.tanggal,
-    empId:   a.EmpID   || a.empId,
-    status:  a.Status  || a.status,
-    ket:     a.Keterangan || a.ket || ''
-  }));
-  appData.absen = (d.absen || []).map(a => ({
-    tanggal: String(a.Tanggal || a.tanggal || ''),
-    empId:   String(a.EmpID   || a.empId   || ''),
-    status:  String(a.Status  || a.status  || ''),
-    ket:     String(a.Keterangan !== undefined ? a.Keterangan : (a.ket||''))
-  }));
-  appData.karyawan = (d.karyawan || []).map(k => ({
-    id:      String(k.ID      || k.id      || ''),
-    nama:    String(k.Nama    || k.nama    || ''),
-    jabatan: String(k.Jabatan || k.jabatan || ''),
-    dept:    String(k.Tim     || k.dept    || ''),
-    aktif:   k.Aktif === true || k.aktif === true || k.Aktif === 'TRUE' || k.aktif === 'TRUE'
-  }));
+
+  appData.karyawan = (d.karyawan || []).map(k => {
+    const rawId = String(k.ID || k.id || '').trim();
+    return {
+      id:         rawId,
+      nid:        normalizeId(rawId),   // normalized untuk matching
+      nama:       String(k.Nama    || k.nama    || '').trim(),
+      jabatan:    String(k.Jabatan || k.jabatan || '').trim(),
+      dept:       String(k.Tim     || k.Dept    || k.dept || '').trim(),
+      aktif:      k.Aktif === true || k.aktif === true ||
+                  String(k.Aktif).toUpperCase() === 'TRUE' || String(k.aktif).toUpperCase() === 'TRUE'
+    };
+  });
+
+  // Build lookup map: normalizedId → karyawan record
+  appData.karyawanMap = {};
+  appData.karyawan.forEach(k => { appData.karyawanMap[k.nid] = k; });
+
+  appData.absen = (d.absen || []).map(a => {
+    const rawEmpId = String(a.EmpID || a.empId || '').trim();
+    return {
+      tanggal: normalizeTanggal(a.Tanggal || a.tanggal),
+      empId:   rawEmpId,
+      nid:     normalizeId(rawEmpId),   // normalized untuk matching
+      nama:    String(a.Nama    || a.nama    || '').trim(),
+      status:  String(a.Status  || a.status  || '').trim(),
+      ket:     String(a.Keterangan !== undefined ? a.Keterangan : (a.ket !== undefined ? a.ket : '')).trim()
+    };
+  }).filter(a => a.tanggal && a.nid && a.status && a.nid !== '-');
+
+  // Deduplikasi: untuk tanggal+empId yang sama, ambil record terakhir (terbaru)
+  const absenMap = new Map();
+  appData.absen.forEach(a => {
+    const key = `${a.tanggal}|${a.nid}`;
+    absenMap.set(key, a); // overwrite dengan yang lebih baru (array sudah terurut dari sheet)
+  });
+  appData.absen = Array.from(absenMap.values());
+
   appData.tim = (d.tim || []).map(t => ({
-    id:   String(t.ID   || t.id   || ''),
-    nama: String(t.Nama || t.nama || '')
+    id:   String(t.ID   || t.id   || '').trim(),
+    nama: String(t.Nama || t.nama || '').trim()
   }));
 }
 
@@ -500,19 +584,19 @@ function loginKaryawan() {
   const id = document.getElementById('sel-karyawan').value;
   if (!id) { showToast('⚠️ Pilih nama pekerja'); return; }
   const k = appData.karyawan.find(x=>x.id===id);
-  session = {role:'karyawan', empId:id, nama:k.nama};
+  session = {role:'karyawan', empId:id, nid: k.nid, nama:k.nama};
   startApp();
 }
 
 function loginManager() {
   const pin = document.getElementById('inp-pin').value;
-  if (pin !== '050626') { showToast('❌ PIN salah'); return; }
-  session = {role:'manager', empId:null, nama:'Management'};
+  if (pin !== '050526') { showToast('❌ PIN salah'); return; }
+  session = {role:'manager', empId:null, nid:null, nama:'Management'};
   startApp();
 }
 
 function logout() {
-  session = {role:null, empId:null, nama:null};
+  session = {role:null, empId:null, nid:null, nama:null};
   document.getElementById('inp-pin').value = '';
   showScreen('login');
 }
@@ -535,7 +619,7 @@ function startApp() {
   buildTabs();
   initFilters();
   if (session.role==='karyawan') switchTab('absen-hari-ini');
-  else { document.getElementById('fil-data-tgl').value = todayStr(); switchTab('mgr-hari-ini'); }
+  else { switchTab('mgr-hari-ini'); }
 }
 
 function buildTabs() {
@@ -591,7 +675,8 @@ function initFilters() {
 // ══════════════════════════════════════════════════════
 function renderAbsenHariIni() {
   const today    = todayStr();
-  const existing = appData.absen.find(a=>a.tanggal===today && a.empId===session.empId);
+  const sessionNid = session.nid || normalizeId(session.empId);
+  const existing = appData.absen.find(a => a.tanggal === today && a.nid === sessionNid);
   const dayName  = DAYS[new Date().getDay()];
   const wrap     = document.getElementById('absen-form-wrap');
 
@@ -619,29 +704,34 @@ function renderAbsenHariIni() {
         </div>
         <div class="form-group" style="margin-bottom:14px">
           <label>Keterangan (opsional)</label>
-          <textarea class="form-group" id="inp-ket-absen" style="width:100%;padding:10px 14px;border:1.5px solid var(--border);border-radius:var(--radius-xs);font-family:'Inter',sans-serif;font-size:14px;resize:vertical;min-height:70px;outline:none" placeholder="Tambahkan keterangan jika perlu..."></textarea>
+          <textarea id="inp-ket-absen" style="width:100%;padding:10px 14px;border:1.5px solid var(--border);border-radius:var(--radius-xs);font-family:'Inter',sans-serif;font-size:14px;resize:vertical;min-height:70px;outline:none" placeholder="Tambahkan keterangan jika perlu..."></textarea>
         </div>
         <button class="btn btn-primary" onclick="submitAbsen()">💾 Simpan Absen</button>
       </div>`;
   }
 
-  const my = appData.absen.filter(a=>a.empId===session.empId)
-    .sort((a,b)=>b.tanggal.localeCompare(a.tanggal));
+  const my = appData.absen.filter(a => a.nid === sessionNid)
+    .sort((a,b) => b.tanggal.localeCompare(a.tanggal));
   const tbody = document.getElementById('tbody-riwayat');
   tbody.innerHTML = !my.length
     ? `<tr><td colspan="4"><div class="empty-state"><div class="icon">📭</div><p>Belum ada data absen</p></div></td></tr>`
-    : my.map(a=>`<tr>
-        <td>${fmtDate(a.tanggal)}</td>
-        <td>${DAYS[new Date(a.tanggal+'T00:00:00').getDay()]}</td>
-        <td><span class="status-badge ${STATUS_CLS[a.status]}">${STATUS_ICON[a.status]} ${a.status}</span></td>
-        <td style="color:var(--text-muted)">${a.ket||'—'}</td>
-      </tr>`).join('');
+    : my.map(a => {
+        const dt = new Date(a.tanggal + 'T00:00:00');
+        const hariStr = !isNaN(dt) ? DAYS[dt.getDay()] : '—';
+        return `<tr>
+          <td>${fmtDate(a.tanggal)}</td>
+          <td>${hariStr}</td>
+          <td><span class="status-badge ${STATUS_CLS[a.status]||'s-belum'}">${STATUS_ICON[a.status]||''} ${a.status}</span></td>
+          <td style="color:var(--text-muted)">${a.ket||'—'}</td>
+        </tr>`;
+      }).join('');
 }
 
 function editAbsenHariIni() {
   const today = todayStr();
-  const idx = appData.absen.findIndex(a=>a.tanggal===today && a.empId===session.empId);
-  if (idx>-1) appData.absen.splice(idx,1);
+  const sessionNid = session.nid || normalizeId(session.empId);
+  const idx = appData.absen.findIndex(a => a.tanggal === today && a.nid === sessionNid);
+  if (idx > -1) appData.absen.splice(idx, 1);
   renderAbsenHariIni();
 }
 
@@ -649,9 +739,28 @@ async function submitAbsen() {
   const status = document.querySelector('input[name="status-absen"]:checked')?.value;
   if (!status) { showToast('⚠️ Pilih status kehadiran'); return; }
   const ket = document.getElementById('inp-ket-absen').value.trim();
+
+  // Validasi double absen
+  const today = todayStr();
+  const sessionNid = session.nid || normalizeId(session.empId);
+  const existing = appData.absen.find(a => a.tanggal === today && a.nid === sessionNid);
+  if (existing) {
+    showToast('⚠️ Anda sudah absen hari ini. Gunakan tombol Ubah Status untuk mengubah.');
+    renderAbsenHariIni();
+    return;
+  }
+
   showLoading('Menyimpan absen...');
   try {
-    await apiPost('saveAbsen', {tanggal:todayStr(), empId:session.empId, status, ket});
+    const k = appData.karyawan.find(x => x.id === session.empId);
+    // Kirim empId sesuai format asli di sheet Karyawan
+    await apiPost('saveAbsen', {
+      tanggal: today,
+      empId:   session.empId,
+      nama:    k?.nama || session.nama,
+      status,
+      ket
+    });
     await refreshData();
     hideLoading();
     showToast('✅ Absen berhasil disimpan!');
@@ -669,7 +778,7 @@ function renderMgrHariIni() {
   const counts  = {Hadir:0,WFH:0,Cuti:0,Sakit:0,Izin:0,'Tidak Hadir':0,Belum:0};
 
   allKar.forEach(k=>{
-    const rec = appData.absen.find(a=>a.tanggal===today&&a.empId===k.id);
+    const rec = appData.absen.find(a=>a.tanggal===today && a.nid===k.nid);
     if (rec) counts[rec.status]=(counts[rec.status]||0)+1; else counts.Belum++;
   });
 
@@ -685,7 +794,7 @@ function renderMgrHariIni() {
 
   const tbody = document.getElementById('tbody-mgr-hari-ini');
   tbody.innerHTML = allKar.map((k,i)=>{
-    const rec    = appData.absen.find(a=>a.tanggal===today&&a.empId===k.id);
+    const rec    = appData.absen.find(a=>a.tanggal===today && a.nid===k.nid);
     const status = rec?.status;
     const badge  = status
       ? `<span class="status-badge ${STATUS_CLS[status]}">${STATUS_ICON[status]} ${status}</span>`
@@ -712,13 +821,14 @@ function renderRekap() {
   const tahun  = parseInt(document.getElementById('fil-tahun').value);
   const allKar = appData.karyawan.filter(k=>k.aktif);
   const fil    = appData.absen.filter(a=>{
-    const d=new Date(a.tanggal+'T00:00:00'); return d.getMonth()===bulan&&d.getFullYear()===tahun;
+    const d = new Date(a.tanggal+'T00:00:00');
+    return !isNaN(d) && d.getMonth()===bulan && d.getFullYear()===tahun;
   });
   const totals = {}; STATUS_LIST.forEach(s=>totals[s]=0);
 
   document.getElementById('tbody-rekap').innerHTML = allKar.map((k,i)=>{
     const c={}; STATUS_LIST.forEach(s=>c[s]=0);
-    fil.filter(a=>a.empId===k.id).forEach(a=>{ if(c[a.status]!==undefined) c[a.status]++; });
+    fil.filter(a=>a.nid===k.nid).forEach(a=>{ if(c[a.status]!==undefined) c[a.status]++; });
     STATUS_LIST.forEach(s=>totals[s]+=c[s]);
     const tot = STATUS_LIST.reduce((s,st)=>s+c[st],0);
     const bg  = i%2?'style="background:var(--surface2)"':'';
@@ -748,9 +858,9 @@ function renderLaporan() {
 
   document.getElementById('tbody-laporan').innerHTML = allKar.map((k,i)=>{
     const c={}; STATUS_LIST.forEach(s=>c[s]=0);
-    fil.filter(a=>a.empId===k.id).forEach(a=>{ if(c[a.status]!==undefined) c[a.status]++; });
+    fil.filter(a=>a.nid===k.nid).forEach(a=>{ if(c[a.status]!==undefined) c[a.status]++; });
     STATUS_LIST.forEach(s=>totals[s]+=c[s]);
-    const izin = c['Cuti']+c['Sakit']+c['Izin']+c['Tidak Hadir'];
+    const izin = c['WFH']+c['Sakit']+c['Izin']+c['Tidak Hadir'];
     const bg   = i%2?'style="background:var(--surface2)"':'';
     return `<tr ${bg}><td style="font-family:monospace;font-size:12px;color:var(--text-muted)">${k.id}</td><td><strong>${k.nama}</strong></td><td style="font-size:13px;color:var(--text-muted)">${k.dept}</td>
       <td style="color:#15803d;font-weight:600">${c['Hadir']}</td><td style="color:#1d4ed8;font-weight:600">${c['WFH']}</td>
@@ -759,7 +869,7 @@ function renderLaporan() {
       <td><span style="background:#fee2e2;color:#b91c1c;font-weight:700;padding:3px 10px;border-radius:20px;font-size:13px">${izin}</span></td></tr>`;
   }).join('');
 
-  const gi = totals['Cuti']+totals['Sakit']+totals['Izin']+totals['Tidak Hadir'];
+  const gi = totals['WFH']+totals['Sakit']+totals['Izin']+totals['Tidak Hadir'];
   document.getElementById('tfoot-laporan').innerHTML =
     `<td colspan="3">TOTAL</td><td>${totals['Hadir']}</td><td>${totals['WFH']}</td><td>${totals['Cuti']}</td><td>${totals['Sakit']}</td><td>${totals['Izin']}</td><td>${totals['Tidak Hadir']}</td><td><strong>${gi}</strong></td>`;
 }
@@ -871,21 +981,25 @@ function renderTblKaryawan() {
 function renderDataAbsen() {
   const tgl  = document.getElementById('fil-data-tgl').value;
   const kar  = document.getElementById('fil-data-kar').value;
-  const kMap = {}; appData.karyawan.forEach(k=>kMap[k.id]=k);
+  const kMap = {};
+  appData.karyawan.forEach(k => { kMap[k.nid] = k; });
+  const filterNid = kar ? normalizeId(kar) : '';
   const data = appData.absen
-    .filter(a=>(!tgl||a.tanggal===tgl)&&(!kar||a.empId===kar))
-    .sort((a,b)=>b.tanggal.localeCompare(a.tanggal)||a.empId.localeCompare(b.empId));
+    .filter(a => (!tgl || a.tanggal === tgl) && (!filterNid || a.nid === filterNid))
+    .sort((a,b) => b.tanggal.localeCompare(a.tanggal) || a.nid.localeCompare(b.nid));
   const tbody = document.getElementById('tbody-data-absen');
   tbody.innerHTML = !data.length
     ? `<tr><td colspan="7"><div class="empty-state"><div class="icon">📭</div><p>Tidak ada data</p></div></td></tr>`
-    : data.map((a,i)=>{
-        const d=new Date(a.tanggal+'T00:00:00');
+    : data.map((a,i) => {
+        const dt = new Date(a.tanggal+'T00:00:00');
+        const hariStr = !isNaN(dt) ? DAYS[dt.getDay()] : '—';
+        const namaKar = kMap[a.nid]?.nama || a.nama || a.empId;
         return `<tr style="${i%2?'background:var(--surface2)':''}">
           <td>${fmtDate(a.tanggal)}</td>
-          <td style="color:var(--text-muted)">${DAYS[d.getDay()]}</td>
+          <td style="color:var(--text-muted)">${hariStr}</td>
           <td style="font-family:monospace;font-size:12px;color:var(--text-muted)">${a.empId}</td>
-          <td><strong>${kMap[a.empId]?.nama||a.empId}</strong></td>
-          <td><span class="status-badge ${STATUS_CLS[a.status]}">${STATUS_ICON[a.status]} ${a.status}</span></td>
+          <td><strong>${namaKar}</strong></td>
+          <td><span class="status-badge ${STATUS_CLS[a.status]||'s-belum'}">${STATUS_ICON[a.status]||''} ${a.status}</span></td>
           <td style="color:var(--text-muted);font-size:13px">${a.ket||'—'}</td>
           <td><button class="btn btn-danger btn-sm" onclick="hapusAbsen('${a.tanggal}','${a.empId}')">🗑</button></td>
         </tr>`;
@@ -908,8 +1022,9 @@ async function hapusAbsen(tanggal, empId) {
 // MODAL INPUT ABSEN (management)
 // ══════════════════════════════════════════════════════
 function openAbsenModal(empId, tanggal) {
-  const k   = appData.karyawan.find(x=>x.id===empId);
-  const rec = appData.absen.find(a=>a.tanggal===tanggal&&a.empId===empId);
+  const k   = appData.karyawan.find(x => x.id === empId);
+  const kNid = normalizeId(empId);
+  const rec = appData.absen.find(a => a.tanggal === tanggal && a.nid === kNid);
   const m   = document.createElement('div');
   m.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.35);z-index:500;display:flex;align-items:center;justify-content:center;padding:20px';
   m.innerHTML = `
@@ -939,7 +1054,7 @@ function openAbsenModal(empId, tanggal) {
     m.remove();
     showLoading('Menyimpan...');
     try {
-      await apiPost('saveAbsen', {tanggal, empId, status, ket});
+      await apiPost('saveAbsen', {tanggal, empId, nama: k?.nama || '', status, ket});
       await refreshData();
       hideLoading();
       showToast('✅ Absen disimpan');
