@@ -271,11 +271,12 @@
             </div>
           </div>
           <div class="table-wrap">
-            <table><thead><tr><th>ID</th><th>Nama</th><th>Tim</th><th>✅ Hadir</th><th>🏠 WFH</th><th>🌴 Cuti</th><th>🤒 Sakit</th><th>📋 Izin</th><th>❌ Alpha</th><th>Total</th></tr></thead>
+            <table><thead><tr><th>ID</th><th>Nama</th><th>Tim</th><th>✅ Hadir</th><th>🏠 WFH</th><th>🌴 Cuti</th><th>🤒 Sakit</th><th>📋 Izin</th><th>❌ Alpha</th><th>Total Izin ⚠</th></tr></thead>
             <tbody id="tbody-rekap"></tbody>
             <tfoot><tr class="tfoot-row" id="tfoot-rekap"></tr></tfoot></table>
           </div>
         </div>
+        <p style="font-size:12px;color:var(--text-light)">⚠ Total Izin = WFH + Sakit + Izin + Tidak Hadir</p>
       </div>
 
       <!-- TAB: LAPORAN PERIODE -->
@@ -830,18 +831,18 @@ function renderRekap() {
     const c={}; STATUS_LIST.forEach(s=>c[s]=0);
     fil.filter(a=>a.nid===k.nid).forEach(a=>{ if(c[a.status]!==undefined) c[a.status]++; });
     STATUS_LIST.forEach(s=>totals[s]+=c[s]);
-    const tot = STATUS_LIST.reduce((s,st)=>s+c[st],0);
+    const tot = c['WFH']+c['Sakit']+c['Izin']+c['Tidak Hadir'];
     const bg  = i%2?'style="background:var(--surface2)"':'';
     return `<tr ${bg}><td style="font-family:monospace;font-size:12px;color:var(--text-muted)">${k.id}</td><td><strong>${k.nama}</strong></td><td style="font-size:13px;color:var(--text-muted)">${k.dept}</td>
       <td style="color:#15803d;font-weight:600">${c['Hadir']}</td><td style="color:#1d4ed8;font-weight:600">${c['WFH']}</td>
       <td style="color:#b45309;font-weight:600">${c['Cuti']}</td><td style="color:#c2410c;font-weight:600">${c['Sakit']}</td>
       <td style="color:#7c3aed;font-weight:600">${c['Izin']}</td><td style="color:#b91c1c;font-weight:600">${c['Tidak Hadir']}</td>
-      <td><strong>${tot}</strong></td></tr>`;
+      <td><span style="background:#fee2e2;color:#b91c1c;font-weight:700;padding:3px 10px;border-radius:20px;font-size:13px">${tot}</span></td></tr>`;
   }).join('');
 
-  const gt = STATUS_LIST.reduce((s,st)=>s+totals[st],0);
+  const gt = totals['WFH']+totals['Sakit']+totals['Izin']+totals['Tidak Hadir'];
   document.getElementById('tfoot-rekap').innerHTML =
-    `<td colspan="3">TOTAL</td><td>${totals['Hadir']}</td><td>${totals['WFH']}</td><td>${totals['Cuti']}</td><td>${totals['Sakit']}</td><td>${totals['Izin']}</td><td>${totals['Tidak Hadir']}</td><td>${gt}</td>`;
+    `<td colspan="3">TOTAL</td><td>${totals['Hadir']}</td><td>${totals['WFH']}</td><td>${totals['Cuti']}</td><td>${totals['Sakit']}</td><td>${totals['Izin']}</td><td>${totals['Tidak Hadir']}</td><td><strong>${gt}</strong></td>`;
 }
 
 // ══════════════════════════════════════════════════════
